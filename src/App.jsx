@@ -302,16 +302,19 @@ function currentStreak(seq) {
 
 async function readShared() {
   try {
-    const res = await window.storage.get(STORE_KEY, true);
-    if (res && res.value) return JSON.parse(res.value);
-  } catch (_) { /* first run: nothing stored yet */ }
+    const item = localStorage.getItem(STORE_KEY);
+    if (item) return JSON.parse(item);
+  } catch (_) {}
   return null;
 }
 
 async function writeShared(state) {
-  const res = await window.storage.set(STORE_KEY, JSON.stringify(state), true);
-  if (!res) throw new Error("write rejected");
-  return res;
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    return true;
+  } catch (_) {
+    throw new Error("Failed to save to local storage");
+  }
 }
 
 async function readMe() {
