@@ -24,7 +24,7 @@ const DEFAULT_PLAYERS = [
   { name: "Chen", rating: 90 },
   { name: "Patar", rating: 86 },
   { name: "David", rating: 82 },
-  { name: "Keenan", rating: 81 },
+  { name: "Keenan", rating: 85 },
   { name: "Ian", rating: 80 },
   { name: "Harold", rating: 75 },
 ];
@@ -37,6 +37,7 @@ const DEFAULT_STATE = {
   players: DEFAULT_PLAYERS,
   results: {}, // id -> { hg, ag, ts }
   dates: {},   // id -> "YYYY-MM-DD"
+  friendlies: [],
   log: [],
 };
 
@@ -298,6 +299,44 @@ function currentStreak(seq) {
   return { mark, n };
 }
 
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function deltaText(v) {
+  return v > 0 ? `+${v}` : `${v}`;
+}
+
+function friendlyDelta(homeRating, awayRating, hg, ag) {
+  const expectedHome = 1 / (1 + Math.pow(10, (awayRating - homeRating) / 12));
+  const actualHome = hg > ag ? 1 : hg === ag ? 0.5 : 0;
+  const margin = Math.max(1, Math.min(3, Math.abs(hg - ag) || 1));
+  let raw = Math.round((actualHome - expectedHome) * 7 * margin);
+  if (raw === 0 && actualHome !== 0.5) raw = actualHome === 1 ? 1 : -1;
+  return clamp(raw, -6, 6);
+}
+
+function applyFriendlyImpact(players, match) {
+  const home = players.find((p) => p.name === match.home);
+  const away = players.find((p) => p.name === match.away);
+  if (!home || !away || !match.played) return { homeDelta: 0, awayDelta: 0 };
+
+  const delta = friendlyDelta(home.rating, away.rating, match.hg, match.ag);
+  home.rating = clamp(home.rating + delta, 40, 99);
+  away.rating = clamp(away.rating - delta, 40, 99);
+
+  return { homeDelta: delta, awayDelta: -delta };
+}
+
+function revertFriendlyImpact(players, match) {
+  const home = players.find((p) => p.name === match.home);
+  const away = players.find((p) => p.name === match.away);
+  if (!home || !away || !match.played) return;
+
+  home.rating = clamp(home.rating - (match.homeDelta || 0), 40, 99);
+  away.rating = clamp(away.rating - (match.awayDelta || 0), 40, 99);
+}
+
 /* ============================ storage ============================ */
 
 const KV_URL = "https://frank-mutt-169456.upstash.io";
@@ -340,6 +379,7 @@ async function readMe() {
 const TABS = [
   ["table", "Table"],
   ["fixtures", "Fixtures"],
+  ["friendly", "Friendly"],
   ["predict", "Predictions"],
   ["players", "Players"],
   ["stats", "Stats"],
@@ -482,6 +522,15 @@ export default function App() {
                 me={me}
                 commit={commit}
                 editing={editing}
+              />
+            )}
+            {tab === "friendly" && (
+              <Friendly
+                state={state}
+                predictor={predictor}
+                canEdit={canEdit}
+                me={me}
+                commit={commit}
               />
             )}
             {tab === "predict" && (
@@ -1098,6 +1147,280 @@ const ordinal = (n) => {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 };
 
+/* ---------------------------- friendly ---------------------------- */
+
+function Friendly({ state, predictor, canEdit, me, commit }) {
+  const playerNames = useMemo(() => state.players.map((p) => p.name), [state.players]);
+  const friendlies = useMemo(
+    () => [...(state.friendlies || [])].sort((a, b) => (b.ts || 0) - (a.ts || 0)),
+    [state.friendlies]
+  );
+
+  const [editingId, setEditingId] = useState(null);
+  const [home, setHome] = useState(playerNames[0] || "");
+  const [away, setAway] = useState(playerNames[1] || "");
+  const [date, setDate] = useState(todayISO());
+  const [hg, setHg] = useState("");
+  const [ag, setAg] = useState("");
+
+  const selected = friendlies.find((m) => m.id === editingId) || null;
+
+  useEffect(() => {
+    if (!selected) {
+      setHome(playerNames[0] || "");
+      setAway(playerNames[1] || "");
+      setDate(todayISO());
+      setHg("");
+      setAg("");
+      return;
+    }
+    setHome(selected.home);
+    setAway(selected.away);
+    setDate(selected.date || todayISO());
+    setHg(selected.played ? String(selected.hg) : "");
+    setAg(selected.played ? String(selected.ag) : "");
+  }, [editingId, selected, playerNames]);
+
+  const canSave =
+    canEdit &&
+    home &&
+    away &&
+    home !== away &&
+    date &&
+    ((hg === "" && ag === "") || (hg !== "" && ag !== "" && Number(hg) >= 0 && Number(ag) >= 0));
+
+  const save = () => {
+    if (!canSave) return;
+
+    const hasScore = hg !== "" && ag !== "";
+    const h = hasScore ? clamp(Math.round(Number(hg)), 0, 30) : null;
+    const a = hasScore ? clamp(Math.round(Number(ag)), 0, 30) : null;
+    const now = Date.now();
+
+    commit(
+      (s) => {
+        if (!Array.isArray(s.friendlies)) s.friendlies = [];
+        if (!Array.isArray(s.players)) return;
+
+        const id = editingId || `${now}-${home}-${away}`.replace(/\s+/g, "-");
+        const idx = s.friendlies.findIndex((m) => m.id === id);
+        const existing = idx >= 0 ? s.friendlies[idx] : null;
+
+        if (existing?.played) {
+          revertFriendlyImpact(s.players, existing);
+        }
+
+        const match = {
+          id,
+          home,
+          away,
+          date,
+          played: hasScore,
+          ts: now,
+        };
+
+        if (hasScore) {
+          match.hg = h;
+          match.ag = a;
+          const impact = applyFriendlyImpact(s.players, match);
+          match.homeDelta = impact.homeDelta;
+          match.awayDelta = impact.awayDelta;
+        } else {
+          match.homeDelta = 0;
+          match.awayDelta = 0;
+        }
+
+        if (idx >= 0) s.friendlies[idx] = match;
+        else s.friendlies.unshift(match);
+
+        s.log = [
+          {
+            id: `${now}-${Math.random().toString(36).slice(2, 7)}`,
+            who: me,
+            text: hasScore
+              ? `Friendly: ${home} ${h}–${a} ${away}`
+              : `Friendly scheduled: ${home} vs ${away}`,
+            ts: now,
+          },
+          ...(s.log || []),
+        ].slice(0, 80);
+      },
+      {
+        who: me,
+        text: editingId
+          ? `Updated friendly ${home} vs ${away}`
+          : `Added friendly ${home} vs ${away}`,
+      }
+    );
+
+    setEditingId(null);
+  };
+
+  const remove = (match) => {
+    commit(
+      (s) => {
+        if (!Array.isArray(s.friendlies)) return;
+        const idx = s.friendlies.findIndex((m) => m.id === match.id);
+        if (idx < 0) return;
+
+        const existing = s.friendlies[idx];
+        if (existing?.played) {
+          revertFriendlyImpact(s.players, existing);
+        }
+
+        s.friendlies.splice(idx, 1);
+      },
+      { who: me, text: `Removed friendly ${match.home} vs ${match.away}` }
+    );
+
+    if (editingId === match.id) setEditingId(null);
+  };
+
+  const edit = (match) => {
+    setEditingId(match.id);
+  };
+
+  return (
+    <section>
+      <div className="card-head bar">
+        <div>
+          <h2 className="h2">Friendly</h2>
+          <p className="muted sm">
+            Optional matches only. Add any pair you want. If you enter a score, the player ratings change and the prediction
+            engine learns from it.
+          </p>
+        </div>
+      </div>
+
+      <div className="card friendly-card">
+        <div className="friendly-grid">
+          <div className="friendly-pair">
+            <label className="field">
+              <span className="lbl">Home player</span>
+              <select className="input" value={home} onChange={(e) => setHome(e.target.value)}>
+                {playerNames.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <span className="mono muted" style={{ alignSelf: "center", paddingTop: 20 }}>
+              vs
+            </span>
+
+            <label className="field">
+              <span className="lbl">Away player</span>
+              <select className="input" value={away} onChange={(e) => setAway(e.target.value)}>
+                {playerNames.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="friendly-pair">
+            <label className="field">
+              <span className="lbl">Date</span>
+              <input
+                type="date"
+                className="input"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+              />
+            </label>
+
+            <span className="mono muted" style={{ alignSelf: "center", paddingTop: 20 }}>
+              score
+            </span>
+
+            <div className="score-edit" style={{ justifyContent: "flex-start" }}>
+              <Stepper label={home || "Home"} value={hg} onChange={setHg} tone="home" />
+              <span className="dash mono">–</span>
+              <Stepper label={away || "Away"} value={ag} onChange={setAg} tone="away" />
+            </div>
+          </div>
+
+          <div className="btns">
+            <button className="primary" onClick={save} disabled={!canSave}>
+              {editingId ? "Update friendly" : "Save friendly"}
+            </button>
+            {editingId && (
+              <button className="ghost" onClick={() => setEditingId(null)}>
+                Cancel edit
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <h3 className="h3">Friendly matches</h3>
+          <p className="muted sm">Newest first. Played matches move ratings, scheduled ones do not.</p>
+        </div>
+
+        {!friendlies.length ? (
+          <p className="empty">No friendly matches yet.</p>
+        ) : (
+          <ul className="friendly-list">
+            {friendlies.map((m) => {
+              const pred = predictor(m.home, m.away);
+              return (
+                <li key={m.id} className="friendly-item">
+                  <div className="friendly-top">
+                    <div>
+                      <div className="friendly-title">
+                        <span className="side home">{m.home}</span>
+                        <span className="mono muted" style={{ padding: "0 6px" }}>
+                          vs
+                        </span>
+                        <span className="side away">{m.away}</span>
+                      </div>
+                      <div className="friendly-meta">
+                        <span className="mono sm muted">{fmtDate(m.date)}</span>
+                        {m.played ? (
+                          <span className="pill done">FT {m.hg}–{m.ag}</span>
+                        ) : (
+                          <span className="pill todo">Scheduled</span>
+                        )}
+                        {m.played && (
+                          <span className="pill">
+                            {deltaText(m.homeDelta)} / {deltaText(m.awayDelta)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="friendly-actions">
+                      <button className="ghost small" onClick={() => edit(m)}>
+                        Edit
+                      </button>
+                      <button className="ghost small danger" onClick={() => remove(m)}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <ProbBar pred={pred} />
+                    <p className="mono sm muted" style={{ marginTop: 6 }}>
+                      xG {pred.lh.toFixed(2)} – {pred.la.toFixed(2)} · likely {pred.likely}
+                    </p>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
 /* ---------------------------- stats ---------------------------- */
 
 function Stats({ table, matches }) {
@@ -1239,12 +1562,12 @@ function Activity({ log, canEdit, me, commit }) {
             <button className="ghost danger" onClick={() => setConfirming(true)}>Start a new season</button>
           ) : (
             <div className="btns">
-              <span className="muted sm">This clears every result and the activity log. Ratings and dates stay.</span>
+              <span className="muted sm">This clears every result, friendly, and the activity log. Ratings and dates stay.</span>
               <button
                 className="primary danger"
                 onClick={() => {
                   commit(
-                    (s) => { s.results = {}; s.log = []; },
+                    (s) => { s.results = {}; s.friendlies = []; s.log = []; },
                     { who: me, text: "Started a new season — all results cleared" }
                   );
                   setConfirming(false);
@@ -1573,6 +1896,16 @@ function Styles() {
 .efl .log-who { font-weight: 700; color: var(--home); font-size: 12px; letter-spacing: -0.01em; }
 .efl .log-text { min-width: 0; }
 .efl .reset { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+
+/* friendly */
+.efl .friendly-grid { display: grid; gap: 12px; }
+.efl .friendly-pair { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: end; }
+.efl .friendly-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.efl .friendly-item { background: var(--panel2); border: 1px solid var(--line); padding: 12px; }
+.efl .friendly-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.efl .friendly-title { display: flex; align-items: center; flex-wrap: wrap; gap: 0; font-weight: 800; letter-spacing: -0.02em; text-transform: uppercase; }
+.efl .friendly-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; align-items: center; }
+.efl .friendly-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 .efl .foot { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--line); }
 .efl .foot p { font-size: 11px; color: var(--muted); font-family: var(--mono); }
