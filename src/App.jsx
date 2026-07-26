@@ -300,21 +300,31 @@ function currentStreak(seq) {
 
 /* ============================ storage ============================ */
 
+const KV_URL = "https://frank-mutt-169456.upstash.io";
+const KV_TOKEN = "gQAAAAAAApXwAAIgcDE1YmM3NzdjYTViM2E0MDJmYWZiMTk2NDg3ZmJhZWYxZQ";
+
 async function readShared() {
   try {
-    const item = localStorage.getItem(STORE_KEY);
-    if (item) return JSON.parse(item);
+    const res = await fetch(`${KV_URL}/get/${STORE_KEY}`, {
+      headers: { Authorization: `Bearer ${KV_TOKEN}` }
+    });
+    const data = await res.json();
+    if (data.result) return JSON.parse(data.result);
   } catch (_) {}
   return null;
 }
 
 async function writeShared(state) {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(state));
-    return true;
-  } catch (_) {
-    throw new Error("Failed to save to local storage");
-  }
+  const res = await fetch(`${KV_URL}/set/${STORE_KEY}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${KV_TOKEN}`,
+      "Content-Type": "text/plain"
+    },
+    body: JSON.stringify(state)
+  });
+  if (!res.ok) throw new Error("Vercel KV write failed");
+  return true;
 }
 
 async function readMe() {
