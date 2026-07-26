@@ -9,7 +9,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
    trying it out.
    ============================================================ */
 
-const API = ""; // e.g. "https://efootball-league.vercel.app/api/league"
+const API = "https://efootball-league-seven.vercel.app"; // e.g. "https://efootball-league.vercel.app/api/league"
 
 /* ---------- settings you can tweak ---------- */
 const BASE_GOALS = 1.6;      // goals per player per match at even strength
