@@ -16,17 +16,18 @@ const BASE_GOALS = 1.6;   // goals per player per match at even strength
 const RATING_SCALE = 22;  // rating points that shift attack/defence by a factor of e
 const HOME_FACTOR = 1.10; // home multiplier on expected goals
 const SHRINK = 1;         // matches before real results outweigh the starting rating
+const REGRESS = 0.05;     // fraction of drift toward baseline after each rating change
 const SIMS = 1500;        // simulated seasons for title odds
 
 const DEFAULT_PLAYERS = [
-  { name: "Drilden", rating: 95 },
-  { name: "Nolan", rating: 91 },
-  { name: "Chen", rating: 90 },
-  { name: "Patar", rating: 86 },
-  { name: "David", rating: 82 },
-  { name: "Keenan", rating: 85 },
-  { name: "Ian", rating: 80 },
-  { name: "Harold", rating: 75 },
+  { name: "Drilden", rating: 95, baselineRating: 95 },
+  { name: "Nolan", rating: 91, baselineRating: 91 },
+  { name: "Chen", rating: 90, baselineRating: 90 },
+  { name: "Patar", rating: 86, baselineRating: 86 },
+  { name: "David", rating: 82, baselineRating: 82 },
+  { name: "Keenan", rating: 85, baselineRating: 85 },
+  { name: "Ian", rating: 80, baselineRating: 80 },
+  { name: "Harold", rating: 75, baselineRating: 75 },
 ];
 
 const DEFAULT_STATE = {
@@ -182,6 +183,7 @@ function computeStrengths(players, table, matches) {
       att = (1 - w) * attPrior + w * (row.gf / row.p / scale);
       def = (1 - w) * defPrior + w * (row.ga / row.p / scale);
     }
+    const last5 = row.seq.slice(-5);
     if (last5.length) {
       const ppg = last5.reduce((s, r) => s + (r === "W" ? 3 : r === "D" ? 1 : 0), 0) / last5.length;
       const form = clamp(1 + 0.04 * (ppg - 1.5), 0.92, 1.08);
@@ -193,6 +195,8 @@ function computeStrengths(players, table, matches) {
 }
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const regressToward = (current, baseline, factor) =>
+  Math.round(current + (baseline - current) * factor) || (baseline > current ? 1 : baseline < current ? -1 : 0);
 
 const FACT = (() => {
   const f = [1];
@@ -321,8 +325,8 @@ function applyFriendlyImpact(players, match) {
 
   const raw = friendlyDelta(home.rating, away.rating, match.hg, match.ag);
   const delta = Math.round(raw * 0.3) || (raw > 0 ? 1 : raw < 0 ? -1 : 0);
-  home.rating = clamp(home.rating + delta, 40, 99);
-  away.rating = clamp(away.rating - delta, 40, 99);
+  home.rating = clamp(regressToward(home.rating + delta, home.baselineRating, REGRESS), 40, 99);
+  away.rating = clamp(regressToward(away.rating - delta, away.baselineRating, REGRESS), 40, 99);
   return { homeDelta: delta, awayDelta: -delta };
 }
 
@@ -331,8 +335,8 @@ function revertFriendlyImpact(players, match) {
   const away = players.find((p) => p.name === match.away);
   if (!home || !away || !match.played) return;
 
-  home.rating = clamp(home.rating - (match.homeDelta || 0), 40, 99);
-  away.rating = clamp(away.rating - (match.awayDelta || 0), 40, 99);
+  home.rating = clamp(regressToward(home.rating - (match.homeDelta || 0), home.baselineRating, REGRESS), 40, 99);
+  away.rating = clamp(regressToward(away.rating - (match.awayDelta || 0), away.baselineRating, REGRESS), 40, 99);
 }
 
 /* ============================ storage ============================ */
