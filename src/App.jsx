@@ -308,7 +308,7 @@ function deltaText(v) {
 }
 
 function friendlyDelta(homeRating, awayRating, hg, ag) {
-  const expectedHome = 1 / (1 + Math.pow(10, (awayRating - homeRating) / 12));
+  const expectedHome = 1 / (1 + Math.exp((awayRating - homeRating) / RATING_SCALE));
   const actualHome = hg > ag ? 1 : hg === ag ? 0.5 : 0;
   const margin = Math.max(1, Math.min(3, Math.abs(hg - ag) || 1));
   let raw = Math.round((actualHome - expectedHome) * 7 * margin);
