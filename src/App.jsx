@@ -182,12 +182,10 @@ function computeStrengths(players, table, matches) {
       att = (1 - w) * attPrior + w * (row.gf / row.p / scale);
       def = (1 - w) * defPrior + w * (row.ga / row.p / scale);
     }
-    const last5 = row.seq.slice(-5);
     if (last5.length) {
       const ppg = last5.reduce((s, r) => s + (r === "W" ? 3 : r === "D" ? 1 : 0), 0) / last5.length;
-      const form = clamp(1 + 0.05 * (ppg - 1.5), 0.9, 1.1);
+      const form = clamp(1 + 0.04 * (ppg - 1.5), 0.92, 1.08);
       att *= form;
-      def /= form;
     }
     out.set(p.name, { att: clamp(att, 0.25, 3.2), def: clamp(def, 0.25, 3.2) });
   }
