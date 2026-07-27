@@ -195,8 +195,12 @@ function computeStrengths(players, table, matches) {
 }
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-const regressToward = (current, baseline, factor) =>
-  Math.round(current + (baseline - current) * factor) || (baseline > current ? 1 : baseline < current ? -1 : 0);
+const regressToward = (current, baseline, factor) => {
+  if (!baseline) return current;
+  const target = current + (baseline - current) * factor;
+  const rounded = Math.round(target);
+  return rounded !== current ? rounded : current;
+};
 
 const FACT = (() => {
   const f = [1];
@@ -403,7 +407,11 @@ export default function App() {
     (async () => {
       const [remote, name] = await Promise.all([readShared(), readMe()]);
       if (!alive) return;
-      if (remote) setState({ ...DEFAULT_STATE, ...remote });
+      if (remote) {
+        const merged = { ...DEFAULT_STATE, ...remote };
+        for (const p of merged.players) { if (p.baselineRating === undefined) p.baselineRating = p.rating; }
+        setState(merged);
+      }
       else {
         try { await writeShared(DEFAULT_STATE); } catch (_) { /* read-only is fine */ }
       }
@@ -419,11 +427,11 @@ export default function App() {
     if (editing.current) return;
     const remote = await readShared();
     if (remote) {
-      setState((prev) =>
-        JSON.stringify(prev) === JSON.stringify({ ...DEFAULT_STATE, ...remote })
-          ? prev
-          : { ...DEFAULT_STATE, ...remote }
-      );
+      setState((prev) => {
+        const merged = { ...DEFAULT_STATE, ...remote };
+        for (const p of merged.players) { if (p.baselineRating === undefined) p.baselineRating = p.rating; }
+        return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged;
+      });
       setSync("ok");
     }
   }, []);
@@ -441,6 +449,7 @@ export default function App() {
     try {
       const remote = (await readShared()) || state;
       const next = JSON.parse(JSON.stringify({ ...DEFAULT_STATE, ...remote }));
+      for (const p of next.players) { if (p.baselineRating === undefined) p.baselineRating = p.rating; }
       mutator(next);
       if (entry) {
         next.log = [
