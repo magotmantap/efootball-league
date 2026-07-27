@@ -15,7 +15,7 @@ const BYE = "__BYE__";
 const BASE_GOALS = 1.6;   // goals per player per match at even strength
 const RATING_SCALE = 22;  // rating points that shift attack/defence by a factor of e
 const HOME_FACTOR = 1.10; // home multiplier on expected goals
-const SHRINK = 5;         // matches before real results outweigh the starting rating
+const SHRINK = 1;         // matches before real results outweigh the starting rating
 const SIMS = 1500;        // simulated seasons for title odds
 
 const DEFAULT_PLAYERS = [
@@ -321,10 +321,10 @@ function applyFriendlyImpact(players, match) {
   const away = players.find((p) => p.name === match.away);
   if (!home || !away || !match.played) return { homeDelta: 0, awayDelta: 0 };
 
-  const delta = friendlyDelta(home.rating, away.rating, match.hg, match.ag);
+  const raw = friendlyDelta(home.rating, away.rating, match.hg, match.ag);
+  const delta = Math.round(raw * 0.3) || (raw > 0 ? 1 : raw < 0 ? -1 : 0);
   home.rating = clamp(home.rating + delta, 40, 99);
   away.rating = clamp(away.rating - delta, 40, 99);
-
   return { homeDelta: delta, awayDelta: -delta };
 }
 
