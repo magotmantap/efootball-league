@@ -313,7 +313,12 @@ function deltaText(v) {
   return v > 0 ? `+${v}` : `${v}`;
 }
 
-function friendlyDelta(homeRating, awayRating, hg, ag) {
+/* Shared rating-impact engine.
+   League matches use factor 1.0, friendlies use 0.3. */
+const LEAGUE_FACTOR   = 1.0;
+const FRIENDLY_FACTOR = 0.3;
+
+function ratingDelta(homeRating, awayRating, hg, ag) {
   const expectedHome = 1 / (1 + Math.exp((awayRating - homeRating) / RATING_SCALE));
   const actualHome = hg > ag ? 1 : hg === ag ? 0.5 : 0;
   const margin = Math.max(1, Math.min(3, Math.abs(hg - ag) || 1));
@@ -322,25 +327,40 @@ function friendlyDelta(homeRating, awayRating, hg, ag) {
   return clamp(raw, -6, 6);
 }
 
-function applyFriendlyImpact(players, match) {
+function applyRatingImpact(players, match, factor) {
   const home = players.find((p) => p.name === match.home);
   const away = players.find((p) => p.name === match.away);
   if (!home || !away || !match.played) return { homeDelta: 0, awayDelta: 0 };
 
-  const raw = friendlyDelta(home.rating, away.rating, match.hg, match.ag);
-  const delta = Math.round(raw * 0.3) || (raw > 0 ? 1 : raw < 0 ? -1 : 0);
+  const raw = ratingDelta(home.rating, away.rating, match.hg, match.ag);
+  const delta = Math.round(raw * factor) || (raw > 0 ? 1 : raw < 0 ? -1 : 0);
   home.rating = clamp(regressToward(home.rating + delta, home.baselineRating, REGRESS), 40, 99);
   away.rating = clamp(regressToward(away.rating - delta, away.baselineRating, REGRESS), 40, 99);
   return { homeDelta: delta, awayDelta: -delta };
 }
 
-function revertFriendlyImpact(players, match) {
+function revertRatingImpact(players, match) {
   const home = players.find((p) => p.name === match.home);
   const away = players.find((p) => p.name === match.away);
   if (!home || !away || !match.played) return;
 
   home.rating = clamp(regressToward(home.rating - (match.homeDelta || 0), home.baselineRating, REGRESS), 40, 99);
   away.rating = clamp(regressToward(away.rating - (match.awayDelta || 0), away.baselineRating, REGRESS), 40, 99);
+}
+
+/* wrappers keep the existing friendly call-sites working */
+function applyFriendlyImpact(players, match) {
+  return applyRatingImpact(players, match, FRIENDLY_FACTOR);
+}
+function revertFriendlyImpact(players, match) {
+  return revertRatingImpact(players, match);
+}
+/* league: full-strength impact */
+function applyLeagueImpact(players, match) {
+  return applyRatingImpact(players, match, LEAGUE_FACTOR);
+}
+function revertLeagueImpact(players, match) {
+  return revertRatingImpact(players, match);
 }
 
 /* ============================ storage ============================ */
@@ -818,7 +838,20 @@ function Editor({ m, pred, canEdit, me, commit, editing }) {
     const a = Math.min(30, Math.round(Number(ag)));
     commit(
       (s) => {
-        s.results[m.id] = { hg: h, ag: a, ts: Date.now() };
+        /* revert the previous impact if we're overwriting a played result
+           that already carries deltas (skips pre-fix results safely) */
+        const existing = s.results[m.id];
+        if (existing && existing.homeDelta !== undefined) {
+          revertLeagueImpact(s.players, {
+            home: m.home, away: m.away, ...existing, played: true,
+          });
+        }
+        const newMatch = { home: m.home, away: m.away, hg: h, ag: a, played: true };
+        const impact = applyLeagueImpact(s.players, newMatch);
+        s.results[m.id] = {
+          hg: h, ag: a, ts: Date.now(),
+          homeDelta: impact.homeDelta, awayDelta: impact.awayDelta,
+        };
         if (date !== m.date) s.dates[m.id] = date;
       },
       { who: me, text: `${m.home} ${h}–${a} ${m.away} · MD${m.round}` }
@@ -827,7 +860,15 @@ function Editor({ m, pred, canEdit, me, commit, editing }) {
 
   const clear = () => {
     commit(
-      (s) => { delete s.results[m.id]; },
+      (s) => {
+        const existing = s.results[m.id];
+        if (existing && existing.homeDelta !== undefined) {
+          revertLeagueImpact(s.players, {
+            home: m.home, away: m.away, ...existing, played: true,
+          });
+        }
+        delete s.results[m.id];
+      },
       { who: me, text: `Cleared the result for ${m.home} v ${m.away} · MD${m.round}` }
     );
   };
