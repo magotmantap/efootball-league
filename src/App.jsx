@@ -16,7 +16,7 @@ const BASE_GOALS = 1.6;   // goals per player per match at even strength
 const RATING_SCALE = 22;  // rating points that shift attack/defence by a factor of e
 const HOME_FACTOR = 1.10; // home multiplier on expected goals
 const SHRINK = 1;         // matches before real results outweigh the starting rating
-const REGRESS = 0.05;     // fraction of drift toward baseline after each rating change
+const REGRESS = 0;     // fraction of drift toward baseline after each rating change
 const SIMS = 1500;        // simulated seasons for title odds
 
 const DEFAULT_PLAYERS = [
@@ -313,27 +313,44 @@ function deltaText(v) {
   return v > 0 ? `+${v}` : `${v}`;
 }
 
-/* Shared rating-impact engine.
-   League matches use factor 1.0, friendlies use 0.3. */
-const LEAGUE_FACTOR   = 1.0;
-const FRIENDLY_FACTOR = 0.3;
+/* ---------- Rating engine: chess-style, upset-heavy ----------
+   ELO_SCALE   how big a gap has to be before a win looks "certain"
+   UPSET_POWER >1 means routine wins barely move, shocks move a lot
+   League swings hit ~3x harder than friendlies.                */
+const K_BASE = 12;
+const ELO_SCALE = 9;
+const UPSET_POWER = 1.35;
+
+const LEAGUE_FACTOR = 1.0;
+const FRIENDLY_FACTOR = 0.25;
+const MAX_SWING_LEAGUE = 9;
+const MAX_SWING_FRIENDLY = 3;
 
 function ratingDelta(homeRating, awayRating, hg, ag) {
-  const expectedHome = 1 / (1 + Math.exp((awayRating - homeRating) / RATING_SCALE));
+  // How likely was the home player to win, on rating alone?
+  const expectedHome = 1 / (1 + Math.exp((awayRating - homeRating) / ELO_SCALE));
   const actualHome = hg > ag ? 1 : hg === ag ? 0.5 : 0;
-  const margin = Math.max(1, Math.min(3, Math.abs(hg - ag) || 1));
-  let raw = Math.round((actualHome - expectedHome) * 7 * margin);
-  if (raw === 0 && actualHome !== 0.5) raw = actualHome === 1 ? 1 : -1;
-  return clamp(raw, -6, 6);
+
+  // Surprise = how far the result was from what the ratings predicted.
+  const surprise = actualHome - expectedHome;
+  const amplified = Math.sign(surprise) * Math.pow(Math.abs(surprise), UPSET_POWER);
+
+  // Bigger wins count a little more, but never dominate.
+  const gd = Math.abs(hg - ag);
+  const margin = 1 + 0.25 * Math.min(Math.max(gd - 1, 0), 4);
+
+  return K_BASE * amplified * margin;
 }
 
-function applyRatingImpact(players, match, factor) {
+function applyRatingImpact(players, match, factor, maxSwing) {
   const home = players.find((p) => p.name === match.home);
   const away = players.find((p) => p.name === match.away);
   if (!home || !away || !match.played) return { homeDelta: 0, awayDelta: 0 };
 
-  const raw = ratingDelta(home.rating, away.rating, match.hg, match.ag);
-  const delta = Math.round(raw * factor) || (raw > 0 ? 1 : raw < 0 ? -1 : 0);
+  const raw = ratingDelta(home.rating, away.rating, match.hg, match.ag) * factor;
+  let delta = Math.round(clamp(raw, -maxSwing, maxSwing));
+  if (delta === 0 && match.hg !== match.ag) delta = raw > 0 ? 1 : -1;
+
   home.rating = clamp(regressToward(home.rating + delta, home.baselineRating, REGRESS), 40, 99);
   away.rating = clamp(regressToward(away.rating - delta, away.baselineRating, REGRESS), 40, 99);
   return { homeDelta: delta, awayDelta: -delta };
@@ -344,8 +361,21 @@ function revertRatingImpact(players, match) {
   const away = players.find((p) => p.name === match.away);
   if (!home || !away || !match.played) return;
 
-  home.rating = clamp(regressToward(home.rating - (match.homeDelta || 0), home.baselineRating, REGRESS), 40, 99);
-  away.rating = clamp(regressToward(away.rating - (match.awayDelta || 0), away.baselineRating, REGRESS), 40, 99);
+  home.rating = clamp(home.rating - (match.homeDelta || 0), 40, 99);
+  away.rating = clamp(away.rating - (match.awayDelta || 0), 40, 99);
+}
+
+function applyFriendlyImpact(players, match) {
+  return applyRatingImpact(players, match, FRIENDLY_FACTOR, MAX_SWING_FRIENDLY);
+}
+function revertFriendlyImpact(players, match) {
+  return revertRatingImpact(players, match);
+}
+function applyLeagueImpact(players, match) {
+  return applyRatingImpact(players, match, LEAGUE_FACTOR, MAX_SWING_LEAGUE);
+}
+function revertLeagueImpact(players, match) {
+  return revertRatingImpact(players, match);
 }
 
 /* wrappers keep the existing friendly call-sites working */
