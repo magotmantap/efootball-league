@@ -378,21 +378,6 @@ function revertLeagueImpact(players, match) {
   return revertRatingImpact(players, match);
 }
 
-/* wrappers keep the existing friendly call-sites working */
-function applyFriendlyImpact(players, match) {
-  return applyRatingImpact(players, match, FRIENDLY_FACTOR);
-}
-function revertFriendlyImpact(players, match) {
-  return revertRatingImpact(players, match);
-}
-/* league: full-strength impact */
-function applyLeagueImpact(players, match) {
-  return applyRatingImpact(players, match, LEAGUE_FACTOR);
-}
-function revertLeagueImpact(players, match) {
-  return revertRatingImpact(players, match);
-}
-
 function recalcAllRatings(state) {
   // Reset everyone to their season-start rating.
   for (const p of state.players) p.rating = p.baselineRating ?? p.rating;
