@@ -1668,38 +1668,43 @@ function Activity({ log, canEdit, me, commit }) {
       )}
 
     {canEdit && (
-  <div className="reset">
-    <button
-      className="ghost"
-      onClick={() =>
-        commit((s) => recalcAllRatings(s), { who: me, text: "Recalculated all ratings from match history" })
-      }
-    >
-      Recalculate ratings
-    </button>
-
-    {!confirming ? (
-      <button className="ghost danger" onClick={() => setConfirming(true)}>Start a new season</button>
-    ) : (
-      <div className="btns">
-        <span className="muted sm">This clears every result, friendly, and the activity log. Ratings and dates stay.</span>
+      <div className="reset">
         <button
-          className="primary danger"
-          onClick={() => {
-            commit(
-              (s) => { s.results = {}; s.friendlies = []; s.log = []; },
-              { who: me, text: "Started a new season — all results cleared" }
-            );
-            setConfirming(false);
-          }}
+          className="ghost"
+          onClick={() =>
+            commit((s) => recalcAllRatings(s), { who: me, text: "Recalculated all ratings from match history" })
+          }
         >
-          Clear all results
+          Recalculate ratings
         </button>
-        <button className="ghost" onClick={() => setConfirming(false)}>Keep the season</button>
+
+        {!confirming ? (
+          <button className="ghost danger" onClick={() => setConfirming(true)}>Start a new season</button>
+        ) : (
+          <div className="btns">
+            <span className="muted sm">This clears every result, friendly, and the activity log. Ratings and dates stay.</span>
+            <button
+              className="primary danger"
+              onClick={() => {
+                commit(
+                  (s) => { s.results = {}; s.friendlies = []; s.log = []; },
+                  { who: me, text: "Started a new season — all results cleared" }
+                );
+                setConfirming(false);
+              }}
+            >
+              Clear all results
+            </button>
+            <button className="ghost" onClick={() => setConfirming(false)}>Keep the season</button>
+          </div>
+        )}
       </div>
     )}
-  </div>
-)}
+    </section>     {/* 👈 this was missing */}
+  );                {/* 👈 this was missing */}
+}                   {/* 👈 this was missing */}
+
+/* ---------------------------- styles ---------------------------- */
 /* ---------------------------- styles ---------------------------- */
 
 function Styles() {
