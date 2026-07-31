@@ -363,6 +363,35 @@ function revertLeagueImpact(players, match) {
   return revertRatingImpact(players, match);
 }
 
+function recalcAllRatings(state) {
+  // Reset everyone to their season-start rating.
+  for (const p of state.players) p.rating = p.baselineRating ?? p.rating;
+
+  // Replay every played match, oldest first, through the real impact logic.
+  const league = Object.entries(state.results || {}).map(([id, r]) => {
+    const [home, away] = id.split("__");
+    return { id, home, away, hg: r.hg, ag: r.ag, ts: r.ts || 0, played: true, kind: "league" };
+  });
+  const friendlies = (state.friendlies || [])
+    .filter((f) => f.played)
+    .map((f) => ({ ...f, kind: "friendly" }));
+
+  const events = [...league, ...friendlies].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+
+  for (const ev of events) {
+    const impact = ev.kind === "league"
+      ? applyLeagueImpact(state.players, ev)
+      : applyFriendlyImpact(state.players, ev);
+
+    if (ev.kind === "league" && state.results[ev.id]) {
+      state.results[ev.id].homeDelta = impact.homeDelta;
+      state.results[ev.id].awayDelta = impact.awayDelta;
+    } else if (ev.kind === "friendly") {
+      const f = state.friendlies.find((x) => x.id === ev.id);
+      if (f) { f.homeDelta = impact.homeDelta; f.awayDelta = impact.awayDelta; }
+    }
+  }
+}
 /* ============================ storage ============================ */
 
 const KV_URL = "https://frank-mutt-169456.upstash.io";
@@ -1608,34 +1637,39 @@ function Activity({ log, canEdit, me, commit }) {
         </ul>
       )}
 
-      {canEdit && (
-        <div className="reset">
-          {!confirming ? (
-            <button className="ghost danger" onClick={() => setConfirming(true)}>Start a new season</button>
-          ) : (
-            <div className="btns">
-              <span className="muted sm">This clears every result, friendly, and the activity log. Ratings and dates stay.</span>
-              <button
-                className="primary danger"
-                onClick={() => {
-                  commit(
-                    (s) => { s.results = {}; s.friendlies = []; s.log = []; },
-                    { who: me, text: "Started a new season — all results cleared" }
-                  );
-                  setConfirming(false);
-                }}
-              >
-                Clear all results
-              </button>
-              <button className="ghost" onClick={() => setConfirming(false)}>Keep the season</button>
-            </div>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
+    {canEdit && (
+  <div className="reset">
+    <button
+      className="ghost"
+      onClick={() =>
+        commit((s) => recalcAllRatings(s), { who: me, text: "Recalculated all ratings from match history" })
+      }
+    >
+      Recalculate ratings
+    </button>
 
+    {!confirming ? (
+      <button className="ghost danger" onClick={() => setConfirming(true)}>Start a new season</button>
+    ) : (
+      <div className="btns">
+        <span className="muted sm">This clears every result, friendly, and the activity log. Ratings and dates stay.</span>
+        <button
+          className="primary danger"
+          onClick={() => {
+            commit(
+              (s) => { s.results = {}; s.friendlies = []; s.log = []; },
+              { who: me, text: "Started a new season — all results cleared" }
+            );
+            setConfirming(false);
+          }}
+        >
+          Clear all results
+        </button>
+        <button className="ghost" onClick={() => setConfirming(false)}>Keep the season</button>
+      </div>
+    )}
+  </div>
+)}
 /* ---------------------------- styles ---------------------------- */
 
 function Styles() {
