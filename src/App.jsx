@@ -1685,11 +1685,10 @@ function Activity({ log, canEdit, me, commit }) {
         )}
       </div>
     )}
-    </section>     {/* 👈 this was missing */}
-  );                {/* 👈 this was missing */}
-}                   {/* 👈 this was missing */}
+    </section>    
+  );                
+}                   
 
-/* ---------------------------- styles ---------------------------- */
 /* ---------------------------- styles ---------------------------- */
 
 function Styles() {
