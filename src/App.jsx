@@ -39,6 +39,7 @@ const DEFAULT_STATE = {
   results: {}, // id -> { hg, ag, ts }
   dates: {},   // id -> "YYYY-MM-DD"
   friendlies: [],
+  picks: [],
   log: [],
 };
 
@@ -407,6 +408,43 @@ function recalcAllRatings(state) {
     }
   }
 }
+/* ---------- Coin mini-game ----------
+   Predict a friend's match before it's played. Correct call earns coins.
+   Coins are replayed from picks, so fixing a score re-settles automatically. */
+const AWARD = {
+  league:   { win: 100, draw: 50 },
+  friendly: { win: 50,  draw: 25 },
+};
+
+function computeCoins(players, picks, results, friendlies) {
+  const tally = new Map(players.map((p) => [p.name, { coins: 0, correct: 0, wrong: 0, open: 0 }]));
+  const fById = new Map((friendlies || []).map((f) => [f.id, f]));
+
+  for (const pick of picks || []) {
+    const acc = tally.get(pick.who);
+    if (!acc) continue;
+
+    let hg, ag;
+    if (pick.kind === "league") {
+      const r = (results || {})[pick.matchId];
+      if (r) { hg = r.hg; ag = r.ag; }
+    } else {
+      const f = fById.get(pick.matchId);
+      if (f && f.played) { hg = f.hg; ag = f.ag; }
+    }
+
+    if (hg === undefined) { acc.open++; continue; }
+
+    const actual = hg > ag ? "home" : hg < ag ? "away" : "draw";
+    if (actual === pick.pick) {
+      acc.coins += actual === "draw" ? AWARD[pick.kind].draw : AWARD[pick.kind].win;
+      acc.correct++;
+    } else {
+      acc.wrong++;
+    }
+  }
+  return tally;
+}
 /* ============================ storage ============================ */
 
 const KV_URL = "https://frank-mutt-169456.upstash.io";
@@ -451,6 +489,7 @@ const TABS = [
   ["fixtures", "Fixtures"],
   ["friendly", "Friendly"],
   ["predict", "Predictions"],
+  ["coins", "Coins"],
   ["players", "Players"],
   ["stats", "Stats"],
   ["log", "Activity"],
