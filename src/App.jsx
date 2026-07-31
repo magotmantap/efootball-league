@@ -669,6 +669,9 @@ export default function App() {
                 commit={commit}
               />
             )}
+             {tab === "coins" && (
+              <Coins state={state} matches={matches} canEdit={canEdit} me={me} commit={commit} />
+            )}
             {tab === "stats" && <Stats table={table} matches={matches} />}
             {tab === "log" && <Activity log={state.log || []} canEdit={canEdit} me={me} commit={commit} />}
           </>
@@ -1727,7 +1730,210 @@ function Activity({ log, canEdit, me, commit }) {
     </section>    
   );                
 }                   
+function Coins({ state, matches, canEdit, me, commit }) {
+  const picks = state.picks || [];
+  const results = state.results || {};
+  const friendlies = state.friendlies || [];
+  const fById = new Map(friendlies.map((f) => [f.id, f]));
 
+  const tally = computeCoins(state.players, picks, results, friendlies);
+  const board = [...tally.entries()]
+    .map(([name, v]) => ({ name, ...v }))
+    .sort((a, b) => b.coins - a.coins || b.correct - a.correct);
+
+  const openLeague = matches
+    .filter((m) => !m.played && m.home !== me && m.away !== me)
+    .sort((a, b) => a.round - b.round);
+  const openFriendly = friendlies.filter((f) => !f.played && f.home !== me && f.away !== me);
+
+  const myPick = (kind, id) =>
+    picks.find((p) => p.who === me && p.kind === kind && p.matchId === id);
+
+  const makePick = (kind, matchId, pick, label) => {
+    commit(
+      (s) => {
+        if (!Array.isArray(s.picks)) s.picks = [];
+        const i = s.picks.findIndex((p) => p.who === me && p.kind === kind && p.matchId === matchId);
+        const entry = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          who: me, kind, matchId, pick, ts: Date.now(),
+        };
+        if (i >= 0) s.picks[i] = entry;
+        else s.picks.push(entry);
+      },
+      { who: me, text: `Predicted ${label}` }
+    );
+  };
+
+  const dropPick = (kind, matchId) => {
+    commit(
+      (s) => {
+        if (!Array.isArray(s.picks)) return;
+        const i = s.picks.findIndex((p) => p.who === me && p.kind === kind && p.matchId === matchId);
+        if (i >= 0) s.picks.splice(i, 1);
+      },
+      { who: me, text: "Removed a prediction" }
+    );
+  };
+
+  const mine = picks
+    .filter((p) => p.who === me)
+    .map((p) => {
+      let hg, ag, title;
+      if (p.kind === "league") {
+        const r = results[p.matchId];
+        const [h, a] = p.matchId.split("__");
+        title = `${h} v ${a}`;
+        if (r) { hg = r.hg; ag = r.ag; }
+      } else {
+        const f = fById.get(p.matchId);
+        title = f ? `${f.home} v ${f.away}` : p.matchId;
+        if (f && f.played) { hg = f.hg; ag = f.ag; }
+      }
+      if (hg === undefined) return { ...p, title, status: "open" };
+      const actual = hg > ag ? "home" : hg < ag ? "away" : "draw";
+      const won = actual === p.pick;
+      const award = won ? (actual === "draw" ? AWARD[p.kind].draw : AWARD[p.kind].win) : 0;
+      return { ...p, title, score: `${hg}\u2013${ag}`, status: won ? "won" : "lost", award };
+    })
+    .sort((a, b) => b.ts - a.ts);
+
+  const pickRow = (kind, id, home, away, meta) => {
+    const chosen = myPick(kind, id);
+    return (
+      <li key={`${kind}-${id}`} className="pickrow">
+        <div className="pickinfo">
+          <span className="side home">{home}</span>
+          <span className="mono muted vs">vs</span>
+          <span className="side away">{away}</span>
+          <span className="mono sm muted">{meta}</span>
+        </div>
+        <div className="pickbtns">
+          {["home", "draw", "away"].map((opt) => (
+            <button
+              key={opt}
+              className={`pickb${chosen && chosen.pick === opt ? " on" : ""}`}
+              disabled={!canEdit}
+              onClick={() =>
+                makePick(kind, id, opt,
+                  `${opt === "draw" ? "a draw" : opt === "home" ? home : away} in ${home} v ${away}`)
+              }
+            >
+              {opt === "home" ? home : opt === "away" ? away : "Draw"}
+              <span className="mono payout">
+                +{opt === "draw" ? AWARD[kind].draw : AWARD[kind].win}
+              </span>
+            </button>
+          ))}
+          {chosen && canEdit && (
+            <button className="ghost small danger" onClick={() => dropPick(kind, id)}>Clear</button>
+          )}
+        </div>
+      </li>
+    );
+  };
+
+  return (
+    <section>
+      <div className="card-head bar">
+        <div>
+          <h2 className="h2">Coins</h2>
+          <p className="muted sm">
+            Predict your friends' matches before they're played. Matchday: {AWARD.league.win} coins
+            for calling a win, {AWARD.league.draw} for a draw. Friendly: {AWARD.friendly.win} and{" "}
+            {AWARD.friendly.draw}. Just for fun — coins never touch the table or ratings.
+          </p>
+        </div>
+      </div>
+
+      {!canEdit && (
+        <div className="card sub">
+          <p className="muted sm">Pick your name at the top to start predicting.</p>
+        </div>
+      )}
+
+      {canEdit && (
+        <div className="card coinme">
+          <div className="coinbig">
+            <span className="mono coinnum">{tally.get(me)?.coins ?? 0}</span>
+            <span className="rating-lbl">your coins</span>
+          </div>
+          <dl className="stats-row coinstats">
+            <Stat k="Correct" v={tally.get(me)?.correct ?? 0} tone="win" />
+            <Stat k="Wrong" v={tally.get(me)?.wrong ?? 0} tone="loss" />
+            <Stat k="Open" v={tally.get(me)?.open ?? 0} />
+            <Stat k="Rank" v={board.findIndex((b) => b.name === me) + 1} />
+          </dl>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-head"><h3 className="h3">Leaderboard</h3></div>
+        <ul className="formlist">
+          {board.map((b, i) => (
+            <li key={b.name}>
+              <span className="mono pos">{i + 1}</span>
+              <span className="name">{b.name}</span>
+              <span className="mono sm muted">{b.correct}✓ {b.wrong}✗</span>
+              <span className="mono pts">{b.coins}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <h3 className="h3">Matchday fixtures to predict</h3>
+          <p className="muted sm">You can't predict your own matches.</p>
+        </div>
+        {!openLeague.length ? (
+          <p className="empty">Nothing left to predict.</p>
+        ) : (
+          <ul className="picklist">
+            {openLeague.slice(0, 12).map((m) =>
+              pickRow("league", m.id, m.home, m.away, `MD${m.round} · ${fmtDate(m.date)}`)
+            )}
+          </ul>
+        )}
+      </div>
+
+      {openFriendly.length > 0 && (
+        <div className="card">
+          <div className="card-head"><h3 className="h3">Scheduled friendlies to predict</h3></div>
+          <ul className="picklist">
+            {openFriendly.map((f) => pickRow("friendly", f.id, f.home, f.away, fmtDate(f.date)))}
+          </ul>
+        </div>
+      )}
+
+      {canEdit && (
+        <div className="card">
+          <div className="card-head"><h3 className="h3">Your predictions</h3></div>
+          {!mine.length ? (
+            <p className="empty">No predictions yet.</p>
+          ) : (
+            <ul className="betlist">
+              {mine.map((s) => (
+                <li key={s.id}>
+                  <span className="betwhat">
+                    <b>{s.title}</b>{" "}
+                    <span className="muted">
+                      — you said {s.pick === "draw" ? "draw" : s.pick === "home" ? "home win" : "away win"}
+                    </span>
+                    {s.score && <span className="mono"> · {s.score}</span>}
+                  </span>
+                  <span className={`pill ${s.status === "won" ? "done" : s.status === "lost" ? "lostpill" : "todo"}`}>
+                    {s.status === "won" ? `+${s.award}` : s.status === "lost" ? "missed" : "open"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 /* ---------------------------- styles ---------------------------- */
 
 function Styles() {
@@ -2050,6 +2256,28 @@ function Styles() {
 .efl .friendly-title { display: flex; align-items: center; flex-wrap: wrap; gap: 0; font-weight: 800; letter-spacing: -0.02em; text-transform: uppercase; }
 .efl .friendly-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; align-items: center; }
 .efl .friendly-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* coins */
+.efl .coinme { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.efl .coinbig { display: grid; justify-items: center; border: 1px solid rgba(242,166,59,0.35); background: rgba(242,166,59,0.07); padding: 10px 18px; }
+.efl .coinnum { font-size: 32px; font-weight: 800; letter-spacing: -0.04em; color: var(--home); line-height: 1; }
+.efl .coinstats { flex: 1; min-width: 240px; margin: 0; }
+.efl .picklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.efl .pickrow { background: var(--panel2); border: 1px solid var(--line); padding: 11px 12px; display: grid; gap: 9px; }
+.efl .pickinfo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.efl .pickinfo .vs { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+.efl .pickinfo .sm { margin-left: auto; }
+.efl .pickbtns { display: flex; gap: 6px; flex-wrap: wrap; }
+.efl .pickb { flex: 1 1 90px; background: var(--ink); border: 1px solid var(--line); color: var(--paper); display: grid; gap: 2px; padding: 7px 6px; justify-items: center; font-size: 11px; font-weight: 700; letter-spacing: -0.01em; }
+.efl .pickb:hover:not(:disabled) { border-color: var(--home); }
+.efl .pickb.on { border-color: var(--home); background: rgba(242,166,59,0.1); color: var(--home); }
+.efl .pickb:disabled { opacity: .45; cursor: not-allowed; }
+.efl .payout { font-size: 10px; color: var(--muted); font-weight: 400; }
+.efl .pickb.on .payout { color: var(--home); }
+.efl .betlist { list-style: none; margin: 12px 0 0; padding: 0; }
+.efl .betlist li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid rgba(49,43,69,0.5); font-size: 13px; }
+.efl .betwhat { flex: 1; min-width: 180px; }
+.efl .pill.lostpill { color: var(--loss); border-color: rgba(224,96,126,0.4); }
 
 .efl .foot { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--line); }
 .efl .foot p { font-size: 11px; color: var(--muted); font-family: var(--mono); }
